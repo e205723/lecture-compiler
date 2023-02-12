@@ -1,0 +1,33 @@
+a.out:
+(__TEXT,__text) section
+_f:
+0000000100003f20	pushq	%rbp
+0000000100003f21	movq	%rsp, %rbp
+0000000100003f24	movl	%edi, -0x4(%rbp)
+0000000100003f27	movl	%esi, -0x8(%rbp)
+0000000100003f2a	movl	-0x4(%rbp), %eax
+0000000100003f2d	addl	-0x8(%rbp), %eax
+0000000100003f30	popq	%rbp
+0000000100003f31	retq
+0000000100003f32	nopw	%cs:(%rax,%rax)
+0000000100003f3c	nopl	(%rax)
+_main:
+0000000100003f40	pushq	%rbp
+0000000100003f41	movq	%rsp, %rbp
+0000000100003f44	subq	$0x10, %rsp
+0000000100003f48	movl	$0x0, -0x4(%rbp)
+0000000100003f4f	movl	$0x1, -0x8(%rbp)
+0000000100003f56	movl	$0x2, -0xc(%rbp)
+0000000100003f5d	movl	-0x8(%rbp), %edi
+0000000100003f60	movl	-0xc(%rbp), %esi
+0000000100003f63	callq	0x100003f20
+0000000100003f68	movl	%eax, %esi
+0000000100003f6a	movl	-0x8(%rbp), %edx
+0000000100003f6d	movl	-0xc(%rbp), %ecx
+0000000100003f70	leaq	0x2f(%rip), %rdi
+0000000100003f77	movb	$0x0, %al
+0000000100003f79	callq	0x100003f86
+0000000100003f7e	xorl	%eax, %eax
+0000000100003f80	addq	$0x10, %rsp
+0000000100003f84	popq	%rbp
+0000000100003f85	retq
