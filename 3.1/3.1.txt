@@ -1,0 +1,626 @@
+From: Yoshiaki Sano <e205723@ie.u-ryukyu.ac.jp>
+Subject: Report on Compiler construction Lecture Exercise 3.1
+Date: February 13, 2023 at 1:37:59 PM GMT+9
+To: Shinji KONO <kono@ie.u-ryukyu.ac.jp>
+
+課題の提出方法に「Report on Compiler consturction Lecture Exercise 1.1」というSubjectで提出するように指示がありましたが、consturctionがスペルがconstructionと違うので、題名のconstructionのスペルを訂正したものとしてないもので2つ送信します。どちらもメールを受け取ってしまっている場合は申し訳ありません。
+
+3.1の課題ページのurlが`https://ie.u-ryukyu.ac.jp/~kono/lecture/compiler/ex/005`になっていて見れなかったですが、`https://ie.u-ryukyu.ac.jp/~kono/lecture/compiler/ex/005.html`に修正したら見れました。
+
+test1.cを用意した
+```
+extern int printf(const char *,...);
+
+unsigned char a[] = {
+      0x01,
+      0x02,
+      0x03,
+      0x04,
+      0x05,
+      0x06,
+      0x07,
+      0x08,
+      0x55,
+      0x12,
+};
+
+long
+test(unsigned char *a, long j)
+{
+   return j;
+}
+
+int
+main()
+{
+    long x = 0;
+    x = test(a,x);
+    printf("x = %lx\n", x);
+    return 0;
+}
+```
+
+## test1.sと a.outを用意する
+
+`$ clang -S test1.c`でアセンブラを出力しtest1.sに書き込む
+
+`$ clang test1.s`でa.outを用意する
+
+## CPU の endian を x/20x と x/20b を使って確認する
+
+`$ lldb a.out`
+
+`(lldb) b test`
+
+`(lldb) run`
+```
+Process 52594 launched: 'a.out' (x86_64)
+Process 52594 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = breakpoint 1.1
+    frame #0: 0x0000000100003f20 a.out`test
+a.out`test:
+->  0x100003f20 <+0>: pushq  %rbp
+    0x100003f21 <+1>: movq   %rsp, %rbp
+    0x100003f24 <+4>: movq   %rdi, -0x8(%rbp)
+    0x100003f28 <+8>: movq   %rsi, -0x10(%rbp)
+Target 0: (a.out) stopped.
+```
+
+`(lldb) x/20x &a`
+
+```
+0x100008010: 0x04030201 0x08070605 0x00001255 0x00000000
+0x100008020: 0x00000000 0x00000000 0x00000000 0x00000000
+0x100008030: 0x00000000 0x00000000 0x00000000 0x00000000
+0x100008040: 0x00000000 0x00000000 0x00000000 0x00000000
+0x100008050: 0x00000000 0x00000000 0x00000000 0x00000000
+```
+
+`(lldb) x/20b &a`
+
+```
+0x100008010: 0x01 0x02 0x03 0x04 0x05 0x06 0x07 0x08
+0x100008018: 0x55 0x12 0x00 0x00 0x00 0x00 0x00 0x00
+0x100008020: 0x00 0x00 0x00 0x00
+```
+
+レジスタの値を調べる
+
+```
+(lldb) p $rdi
+(unsigned long) $2 = 4295000080
+(lldb) p $rsi
+(unsigned long) $3 = 0
+```
+
+lldbからログアウトする(`ctrl-d`)
+
+## test1.s を書き換えて、さまざまなアセンブラ命令を試す
+
+書き換えずにコピーを用意してアセンブラ命令を出す
+
+- `$ cp test1.s test2.s`でtest2.sの中身をコピーしたtest2.sを作成した
+
+以下のように編集した
+
+test2.s
+
+```
+.section __TEXT,__text,regular,pure_instructions
+.build_version macos, 12, 0 sdk_version 12, 0
+.globl _test                           ## -- Begin function test
+.p2align 4, 0x90
+_test:                                  ## @test
+.cfi_startproc
+## %bb.0:
+pushq %rbp
+.cfi_def_cfa_offset 16
+.cfi_offset %rbp, -16
+movq %rsp, %rbp
+.cfi_def_cfa_register %rbp
+movq    %rdi, -8(%rbp)
+movq    %rsi, -16(%rbp)
+movq    (%rdi),%rax
+popq    %rbp
+retq
+.cfi_endproc
+                                        ## -- End function
+.globl _main                           ## -- Begin function main
+.p2align 4, 0x90
+_main:                                  ## @main
+.cfi_startproc
+## %bb.0:
+pushq %rbp
+.cfi_def_cfa_offset 16
+.cfi_offset %rbp, -16
+movq %rsp, %rbp
+.cfi_def_cfa_register %rbp
+subq $16, %rsp
+movl $0, -4(%rbp)
+movq $0, -16(%rbp)
+movq -16(%rbp), %rsi
+leaq _a(%rip), %rdi
+callq _test
+movq %rax, -16(%rbp)
+movq -16(%rbp), %rsi
+leaq L_.str(%rip), %rdi
+movb $0, %al
+callq _printf
+xorl %eax, %eax
+addq $16, %rsp
+popq %rbp
+retq
+.cfi_endproc
+                                        ## -- End function
+.section __DATA,__data
+.globl _a                              ## @a
+_a:
+.ascii "\001\002\003\004\005\006\007\bU\022"
+
+.section __TEXT,__cstring,cstring_literals
+L_.str:                                 ## @.str
+.asciz "x = %lx\n"
+
+.subsections_via_symbols
+```
+
+test1.sとtest2.sの差分、上がtest1.sで下がtest2.s
+```
+13,16c13,16
+< movq %rdi, -8(%rbp)
+< movq %rsi, -16(%rbp)
+< movq -16(%rbp), %rax
+< popq %rbp
+---
+> movq    %rdi, -8(%rbp)
+> movq    %rsi, -16(%rbp)
+> movq    (%rdi),%rax
+> popq    %rbp
+```
+
+`$ mv a.out a.1.out`でa.outのtest1.sバージョンのバックアップを取った
+
+`$ clang test2.s`でa.outを生成した
+
+lldbで以下のような作業をした
+
+```
+$ lldb a.out
+(lldb) target create "a.out"
+Current executable set to 'a.out' (x86_64).
+(lldb) b test
+Breakpoint 1: where = a.out`test, address = 0x0000000100003f20
+(lldb) process launch
+Process 53418 launched: 'a.out' (x86_64)
+Process 53418 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = breakpoint 1.1
+    frame #0: 0x0000000100003f20 a.out`test
+a.out`test:
+->  0x100003f20 <+0>: pushq  %rbp
+    0x100003f21 <+1>: movq   %rsp, %rbp
+    0x100003f24 <+4>: movq   %rdi, -0x8(%rbp)
+    0x100003f28 <+8>: movq   %rsi, -0x10(%rbp)
+Target 0: (a.out) stopped.
+(lldb) stepi
+Process 53418 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003f21 a.out`test + 1
+a.out`test:
+->  0x100003f21 <+1>:  movq   %rsp, %rbp
+    0x100003f24 <+4>:  movq   %rdi, -0x8(%rbp)
+    0x100003f28 <+8>:  movq   %rsi, -0x10(%rbp)
+    0x100003f2c <+12>: movq   (%rdi), %rax
+Target 0: (a.out) stopped.
+(lldb) stepi
+Process 53418 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003f24 a.out`test + 4
+a.out`test:
+->  0x100003f24 <+4>:  movq   %rdi, -0x8(%rbp)
+    0x100003f28 <+8>:  movq   %rsi, -0x10(%rbp)
+    0x100003f2c <+12>: movq   (%rdi), %rax
+    0x100003f2f <+15>: popq   %rbp
+Target 0: (a.out) stopped.
+(lldb) stepi
+Process 53418 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003f28 a.out`test + 8
+a.out`test:
+->  0x100003f28 <+8>:  movq   %rsi, -0x10(%rbp)
+    0x100003f2c <+12>: movq   (%rdi), %rax
+    0x100003f2f <+15>: popq   %rbp
+    0x100003f30 <+16>: retq
+Target 0: (a.out) stopped.
+(lldb) stepi
+Process 53418 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003f2c a.out`test + 12
+a.out`test:
+->  0x100003f2c <+12>: movq   (%rdi), %rax
+    0x100003f2f <+15>: popq   %rbp
+    0x100003f30 <+16>: retq
+    0x100003f31 <+17>: nopw   %cs:(%rax,%rax)
+Target 0: (a.out) stopped.
+(lldb) stepi
+Process 53418 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003f2f a.out`test + 15
+a.out`test:
+->  0x100003f2f <+15>: popq   %rbp
+    0x100003f30 <+16>: retq
+    0x100003f31 <+17>: nopw   %cs:(%rax,%rax)
+    0x100003f3b <+27>: nopl   (%rax,%rax)
+Target 0: (a.out) stopped.
+(lldb) p (void*) $rax
+(void *) $0 = 0x0807060504030201
+(lldb) p (void*) $ah
+(void *) $1 = 0x0000000000000002
+(lldb) p (void*) $al
+(void *) $2 = 0x0000000000000001
+(lldb) p (void*) $eax
+(void *) $3 = 0x0000000004030201
+(lldb) p (void*) $rbx
+(void *) $4 = 0x00000001000c0060
+```
+
+作業のログをもとに`movq (%rdi),%rax`を実行した時点の各レジスタの値を表にした。
+
+| レジスタ | 格納されている値 |
+|---|---|
+| %rax | 0x0807060504030201 |
+| %ah | 0x0000000000000002 |
+| %al | 0x0000000000000001 |
+| %eax | 0x0000000004030201 |
+| %rbx | 0x00000001000c0060 |
+
+## test1.s を書き換えて、さまざまなアセンブラ命令を試す(2)
+
+- `$ cp test1.s test3.s`でtest3.sの中身をコピーしたtest3.sを作成した
+
+以下のように編集した
+
+test3.s
+
+```
+.section __TEXT,__text,regular,pure_instructions
+.build_version macos, 12, 0 sdk_version 12, 0
+.globl _test                           ## -- Begin function test
+.p2align 4, 0x90
+_test:                                  ## @test
+.cfi_startproc
+## %bb.0:
+pushq %rbp
+.cfi_def_cfa_offset 16
+.cfi_offset %rbp, -16
+movq    (%rdi), %rax
+movq    2(%rdi), %rax
+movq    2(%rdi), %rbx
+movq   %rdi, %rbx
+addq    $0x4, %rbx
+movl    (%rbx), %eax
+incq    %rbx
+movq    (%rbx),%rax
+movq    $0x4, %rax
+movl    4(%rbx,%rax),%ecx
+leaq    4(%rbx,%rax),%rcx
+movb    2(%rbx),%al
+movsbl  2(%rbx),%eax
+movsbl  3(%rbx),%eax
+movsbq  3(%rbx),%rax
+leaq    8(%rbx,%rax),%rcx
+leaq    8(%rbx,%rax,2),%rcx
+ret
+.cfi_endproc
+                                        ## -- End function
+.globl _main                           ## -- Begin function main
+.p2align 4, 0x90
+_main:                                  ## @main
+.cfi_startproc
+## %bb.0:
+pushq %rbp
+.cfi_def_cfa_offset 16
+.cfi_offset %rbp, -16
+movq %rsp, %rbp
+.cfi_def_cfa_register %rbp
+subq $16, %rsp
+movl $0, -4(%rbp)
+movq $0, -16(%rbp)
+movq -16(%rbp), %rsi
+leaq _a(%rip), %rdi
+callq _test
+movq %rax, -16(%rbp)
+movq -16(%rbp), %rsi
+leaq L_.str(%rip), %rdi
+movb $0, %al
+callq _printf
+xorl %eax, %eax
+addq $16, %rsp
+popq %rbp
+retq
+.cfi_endproc
+                                        ## -- End function
+.section __DATA,__data
+.globl _a                              ## @a
+_a:
+.ascii "\001\002\003\004\005\006\007\bU\022"
+
+.section __TEXT,__cstring,cstring_literals
+L_.str:                                 ## @.str
+.asciz "x = %lx\n"
+
+.subsections_via_symbols
+```
+
+test1.sとtest3.sの差分、上がtest1.sで下がtest3.s
+```
+11,17c11,28
+< movq %rsp, %rbp
+< .cfi_def_cfa_register %rbp
+< movq %rdi, -8(%rbp)
+< movq %rsi, -16(%rbp)
+< movq -16(%rbp), %rax
+< popq %rbp
+< retq
+---
+> movq    (%rdi), %rax
+> movq    2(%rdi), %rax
+> movq    2(%rdi), %rbx
+> movq   %rdi, %rbx
+> addq    $0x4, %rbx
+> movl    (%rbx), %eax
+> incq    %rbx
+> movq    (%rbx),%rax
+> movq    $0x4, %rax
+> movl    4(%rbx,%rax),%ecx
+> leaq    4(%rbx,%rax),%rcx
+> movb    2(%rbx),%al
+> movsbl  2(%rbx),%eax
+> movsbl  3(%rbx),%eax
+> movsbq  3(%rbx),%rax
+> leaq    8(%rbx,%rax),%rcx
+> leaq    8(%rbx,%rax,2),%rcx
+> ret
+```
+
+`$ mv a.out a.2.out`でa.outのtest2.sバージョンのバックアップを取った
+
+`$ clang test3.s`でa.outを生成した
+
+lldbで以下のような作業をした
+
+```
+$ lldb a.out
+(lldb) target create "a.out"
+Current executable set to 'a.out' (x86_64).
+(lldb) b test
+Breakpoint 1: where = a.out`test, address = 0x0000000100003ef0
+(lldb) process launch
+Process 53662 launched: 'a.out' (x86_64)
+Process 53662 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = breakpoint 1.1
+    frame #0: 0x0000000100003ef0 a.out`test
+a.out`test:
+->  0x100003ef0 <+0>: pushq  %rbp
+    0x100003ef1 <+1>: movq   (%rdi), %rax
+    0x100003ef4 <+4>: movq   0x2(%rdi), %rax
+    0x100003ef8 <+8>: movq   0x2(%rdi), %rbx
+Target 0: (a.out) stopped.
+(lldb) stepi
+Process 53662 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003ef1 a.out`test + 1
+a.out`test:
+->  0x100003ef1 <+1>:  movq   (%rdi), %rax
+    0x100003ef4 <+4>:  movq   0x2(%rdi), %rax
+    0x100003ef8 <+8>:  movq   0x2(%rdi), %rbx
+    0x100003efc <+12>: movq   %rdi, %rbx
+Target 0: (a.out) stopped.
+(lldb) stepi
+Process 53662 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003ef4 a.out`test + 4
+a.out`test:
+->  0x100003ef4 <+4>:  movq   0x2(%rdi), %rax
+    0x100003ef8 <+8>:  movq   0x2(%rdi), %rbx
+    0x100003efc <+12>: movq   %rdi, %rbx
+    0x100003eff <+15>: addq   $0x4, %rbx
+Target 0: (a.out) stopped.
+(lldb) stepi
+Process 53662 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003ef8 a.out`test + 8
+a.out`test:
+->  0x100003ef8 <+8>:  movq   0x2(%rdi), %rbx
+    0x100003efc <+12>: movq   %rdi, %rbx
+    0x100003eff <+15>: addq   $0x4, %rbx
+    0x100003f03 <+19>: movl   (%rbx), %eax
+Target 0: (a.out) stopped.
+(lldb) stepi
+Process 53662 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003efc a.out`test + 12
+a.out`test:
+->  0x100003efc <+12>: movq   %rdi, %rbx
+    0x100003eff <+15>: addq   $0x4, %rbx
+    0x100003f03 <+19>: movl   (%rbx), %eax
+    0x100003f05 <+21>: incq   %rbx
+Target 0: (a.out) stopped.
+(lldb) stepi
+Process 53662 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003eff a.out`test + 15
+a.out`test:
+->  0x100003eff <+15>: addq   $0x4, %rbx
+    0x100003f03 <+19>: movl   (%rbx), %eax
+    0x100003f05 <+21>: incq   %rbx
+    0x100003f08 <+24>: movq   (%rbx), %rax
+Target 0: (a.out) stopped.
+(lldb) stepi
+Process 53662 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003f03 a.out`test + 19
+a.out`test:
+->  0x100003f03 <+19>: movl   (%rbx), %eax
+    0x100003f05 <+21>: incq   %rbx
+    0x100003f08 <+24>: movq   (%rbx), %rax
+    0x100003f0b <+27>: movq   $0x4, %rax
+Target 0: (a.out) stopped.
+(lldb) stepi
+Process 53662 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003f05 a.out`test + 21
+a.out`test:
+->  0x100003f05 <+21>: incq   %rbx
+    0x100003f08 <+24>: movq   (%rbx), %rax
+    0x100003f0b <+27>: movq   $0x4, %rax
+    0x100003f12 <+34>: movl   0x4(%rbx,%rax), %ecx
+Target 0: (a.out) stopped.
+(lldb) p (void*) $eax
+(void *) $0 = 0x0000000008070605
+(lldb) stepi
+Process 53662 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003f08 a.out`test + 24
+a.out`test:
+->  0x100003f08 <+24>: movq   (%rbx), %rax
+    0x100003f0b <+27>: movq   $0x4, %rax
+    0x100003f12 <+34>: movl   0x4(%rbx,%rax), %ecx
+    0x100003f16 <+38>: leaq   0x4(%rbx,%rax), %rcx
+Target 0: (a.out) stopped.
+(lldb) p (void*) $rbx
+(void *) $0 = 0x0000000100008015
+(lldb) p (void*) $rax
+(void *) $1 = 0x0000000008070605
+(lldb) stepi
+Process 53662 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003f0b a.out`test + 27
+a.out`test:
+->  0x100003f0b <+27>: movq   $0x4, %rax
+    0x100003f12 <+34>: movl   0x4(%rbx,%rax), %ecx
+    0x100003f16 <+38>: leaq   0x4(%rbx,%rax), %rcx
+    0x100003f1b <+43>: movb   0x2(%rbx), %al
+Target 0: (a.out) stopped.
+(lldb) p (void*) $rax
+(void *) $1 = 0x0000001255080706
+(lldb) stepi
+Process 53662 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003f12 a.out`test + 34
+a.out`test:
+->  0x100003f12 <+34>: movl   0x4(%rbx,%rax), %ecx
+    0x100003f16 <+38>: leaq   0x4(%rbx,%rax), %rcx
+    0x100003f1b <+43>: movb   0x2(%rbx), %al
+    0x100003f1e <+46>: movsbl 0x2(%rbx), %eax
+Target 0: (a.out) stopped.
+(lldb) stepi
+Process 53662 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003f16 a.out`test + 38
+a.out`test:
+->  0x100003f16 <+38>: leaq   0x4(%rbx,%rax), %rcx
+    0x100003f1b <+43>: movb   0x2(%rbx), %al
+    0x100003f1e <+46>: movsbl 0x2(%rbx), %eax
+    0x100003f22 <+50>: movsbl 0x3(%rbx), %eax
+Target 0: (a.out) stopped.
+(lldb) stepi
+Process 53662 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003f1b a.out`test + 43
+a.out`test:
+->  0x100003f1b <+43>: movb   0x2(%rbx), %al
+    0x100003f1e <+46>: movsbl 0x2(%rbx), %eax
+    0x100003f22 <+50>: movsbl 0x3(%rbx), %eax
+    0x100003f26 <+54>: movsbq 0x3(%rbx), %rax
+Target 0: (a.out) stopped.
+(lldb) stepi
+Process 53662 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003f1e a.out`test + 46
+a.out`test:
+->  0x100003f1e <+46>: movsbl 0x2(%rbx), %eax
+    0x100003f22 <+50>: movsbl 0x3(%rbx), %eax
+    0x100003f26 <+54>: movsbq 0x3(%rbx), %rax
+    0x100003f2b <+59>: leaq   0x8(%rbx,%rax), %rcx
+Target 0: (a.out) stopped.
+(lldb) p (void*) $eax
+(void *) $2 = 0x0000000000000008
+(lldb) stepi
+Process 53662 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003f22 a.out`test + 50
+a.out`test:
+->  0x100003f22 <+50>: movsbl 0x3(%rbx), %eax
+    0x100003f26 <+54>: movsbq 0x3(%rbx), %rax
+    0x100003f2b <+59>: leaq   0x8(%rbx,%rax), %rcx
+    0x100003f30 <+64>: leaq   0x8(%rbx,%rax,2), %rcx
+Target 0: (a.out) stopped.
+(lldb) p (void*) $eax
+(void *) $3 = 0x0000000000000008
+(lldb) stepi
+Process 53662 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003f26 a.out`test + 54
+a.out`test:
+->  0x100003f26 <+54>: movsbq 0x3(%rbx), %rax
+    0x100003f2b <+59>: leaq   0x8(%rbx,%rax), %rcx
+    0x100003f30 <+64>: leaq   0x8(%rbx,%rax,2), %rcx
+    0x100003f35 <+69>: retq
+Target 0: (a.out) stopped.
+(lldb) p (void*) $eax
+(void *) $4 = 0x0000000000000055
+(lldb) stepi
+Process 53662 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003f2b a.out`test + 59
+a.out`test:
+->  0x100003f2b <+59>: leaq   0x8(%rbx,%rax), %rcx
+    0x100003f30 <+64>: leaq   0x8(%rbx,%rax,2), %rcx
+    0x100003f35 <+69>: retq
+    0x100003f36 <+70>: nopw   %cs:(%rax,%rax)
+Target 0: (a.out) stopped.
+(lldb) p (void*) $rax
+(void *) $5 = 0x0000000000000055
+(lldb) stepi
+Process 53662 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003f30 a.out`test + 64
+a.out`test:
+->  0x100003f30 <+64>: leaq   0x8(%rbx,%rax,2), %rcx
+    0x100003f35 <+69>: retq
+    0x100003f36 <+70>: nopw   %cs:(%rax,%rax)
+
+a.out`main:
+    0x100003f40 <+0>:  pushq  %rbp
+Target 0: (a.out) stopped.
+(lldb) p (void*) $rcx
+(void *) $6 = 0x0000000100008072
+(lldb) stepi
+Process 53662 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100003f35 a.out`test + 69
+a.out`test:
+->  0x100003f35 <+69>: retq
+    0x100003f36 <+70>: nopw   %cs:(%rax,%rax)
+
+a.out`main:
+    0x100003f40 <+0>:  pushq  %rbp
+    0x100003f41 <+1>:  movq   %rsp, %rbp
+Target 0: (a.out) stopped.
+(lldb) p (void*) $rcx
+(void *) $7 = 0x00000001000080c7
+```
+
+作業ログをもとに課題ページで問われている質問とその解答の表を導出した
+
+| 質問 | 解答 |
+|---|---|
+| movl (%rbx),%eaxを実行した時の%eaxの値は? | 0x0000000008070605 |
+| incl %rbxを実行してmovq (%rbx),%raxを実行した時の%raxの値は? | 0x0000001255080706 |
+| movl 4(%rbx,%rax),%ecxを実行した時の%ecxレジスタの値がロードするメモリのアドレスは? | 0x0000000108078624 |
+| movb 2(%rbx),%alを実行した時の%eaxの値は? | 0x0000000000000008 |
+| movsbl 2(%rbx),%eaxを実行した時の%eaxの値は? | 0x0000000000000008 |
+| movsbl 3(%rbx),%eaxを実行した時の%eaxの値は? | 0x0000000000000055 |
+| movsbq 3(%rbx),%raxを実行した時の%raxの値は? | 0x0000000000000055 |
+| leaq 8(%rbx,%eax),%rcxを実行した時の%rcxの値は? | 0x0000000100008072 |
+| leaq 8(%rbx,%eax,2),%rcxを実行した時の%rcxの値は? | 0x00000001000080c7 |

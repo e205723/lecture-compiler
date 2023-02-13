@@ -1,0 +1,250 @@
+From: Yoshiaki Sano <e205723@ie.u-ryukyu.ac.jp>
+Subject: Report on Compiler construction Lecture Exercise 2.1
+Date: February 13, 2023 at 5:00:05 AM GMT+9
+To: Shinji KONO <kono@ie.u-ryukyu.ac.jp>
+
+課題の提出方法に「Report on Compiler consturction Lecture Exercise 1.1」というSubjectで提出するように指示がありましたが、consturctionがスペルがconstructionと違うので、題名のconstructionのスペルを訂正したものとしてないもので2つ送信します。どちらもメールを受け取ってしまっている場合は申し訳ありません。
+
+`program check_endian.c`というファイル名で中身が以下のようなファイルを作る
+
+```
+int check = 0x12345678;
+
+int main()
+{
+    char i, *ptr;
+    ptr = (char *)&check;
+    i = ptr[1];
+    return i;
+}
+```
+
+## compileしたassemblerを、i386, emt64 のCPUで表示
+
+`$ clang -arch i386 -S check_endian.c && mv check_endian.s check_endian.i386.s`を実行して、check_endian.i386.sというファイルにi386のアセンブラを出力する
+
+check_endian.i386.sの中身
+
+```
+.section __TEXT,__text,regular,pure_instructions
+.build_version macos, 12, 0 sdk_version 12, 0
+.globl _main                           ## -- Begin function main
+.p2align 4, 0x90
+_main:                                  ## @main
+.cfi_startproc
+## %bb.0:
+pushl %ebp
+.cfi_def_cfa_offset 8
+.cfi_offset %ebp, -8
+movl %esp, %ebp
+.cfi_def_cfa_register %ebp
+subl $12, %esp
+calll L0$pb
+L0$pb:
+popl %eax
+leal _check-L0$pb(%eax), %eax
+movl $0, -4(%ebp)
+movl %eax, -12(%ebp)
+movl -12(%ebp), %eax
+movb 1(%eax), %al
+movb %al, -5(%ebp)
+movsbl -5(%ebp), %eax
+addl $12, %esp
+popl %ebp
+retl
+.cfi_endproc
+                                        ## -- End function
+.section __DATA,__data
+.globl _check                          ## @check
+.p2align 2
+_check:
+.long 305419896                       ## 0x12345678
+
+.subsections_via_symbols
+```
+
+`$ clang -arch x86_64 -S check_endian.c && mv check_endian.s check_endian.x86_64.s`を実行して、check_endian.x86_64.sというファイルにemt64のアセンブラを出力する
+
+check_endian.x86_64.sの中身
+```
+.section __TEXT,__text,regular,pure_instructions
+.build_version macos, 12, 0 sdk_version 12, 0
+.globl _main                           ## -- Begin function main
+.p2align 4, 0x90
+_main:                                  ## @main
+.cfi_startproc
+## %bb.0:
+pushq %rbp
+.cfi_def_cfa_offset 16
+.cfi_offset %rbp, -16
+movq %rsp, %rbp
+.cfi_def_cfa_register %rbp
+leaq _check(%rip), %rax
+movl $0, -4(%rbp)
+movq %rax, -16(%rbp)
+movq -16(%rbp), %rax
+movb 1(%rax), %al
+movb %al, -5(%rbp)
+movsbl -5(%rbp), %eax
+popq %rbp
+retq
+.cfi_endproc
+                                        ## -- End function
+.section __DATA,__data
+.globl _check                          ## @check
+.p2align 2
+_check:
+.long 305419896                       ## 0x12345678
+
+.subsections_via_symbols
+```
+
+## gdb で i にどのような値が入るかを確認
+
+このようなファイル構成を作るためにファイルを移動、作成する
+
+```
+.
+├── c_env
+│   ├── Dockerfile
+│   ├── check_endian.c
+│   ├── check_endian.i386.s
+│   └── check_endian.x86_64.s
+└── docker-compose.yml
+```
+
+docker-comopse.yml
+```
+services:
+  c_env:
+    build: ./c_env/
+    container_name: c_env
+    security_opt:
+      - seccomp:unconfined
+    volumes:
+      - "./c_env:/workplace"
+    tty: true
+```
+
+c_env/Dockerfile
+```
+FROM ubuntu:22.04
+RUN mkdir workplace &&\
+    apt-get update &&\
+    apt-get -y install lldb gdb cmake manpages-dev
+WORKDIR /workplace/
+```
+
+Docker Desktopを起動する
+
+`$ docker-compose up -d`
+
+`$ docker-compose exec c_env bash`
+
+`$ gcc -m64 -g -O0 -o check_endian check_endian.c`でアーキテクチャをx86_64で指定して、コンパイルする
+
+`$ gdb check_endian`を実行した
+
+`(gdb) break check_endian.c:8`で8行目にbreakpointを設置
+
+`(gdb) run`で実行した
+
+`(gdb) info locals i`を実行したら、`i = 86 'V'`と出力された。
+
+
+## CPUは、Little-Endian か Big-Endian か
+
+`(gdb) x/20b &check`で「check」変数に格納されている値を20バイト分のバイナリ値として表示した
+
+```
+0x555555558010 <check>: 120     86      52      18      0       0       0       0
+0x555555558018: 0       0       0       0       0       0       0       0
+0x555555558020: 0       0       0       0
+```
+
+最初の8バイト目（`0x555555558010`）に格納されている値は、 `120     86      52      18      0       0       0       0`だった
+
+little-endianでは、低いメモリアドレスに格納されるバイトが先頭バイトになるため、`0x555555558010`のように0が最後のバイトに格納される
+
+## trace の結果
+
+`(gdb) exit`で一回抜ける
+`gdb check_endian`でもう一度gdbに入る
+
+`(gdb) tbreak main` トレースポイント設置
+`(gdb) run` 実行
+`(gdb) backtrace`で、関数の呼び出し順や、どの関数からどの関数へと呼び出されたのかなどの現在のトレースポイントまでのトレース情報を一覧表示している
+
+```
+#0  main () at check_endian.c:6
+```
+
+## Endian の変換
+
+```
+Endian の変換はどのような時に必要になるか。どのようにすれば実現できるか?
+```
+
+Endian変換は、バイトオーダーが異なるシステム間でのデータのやりとりや、データの保存・読み込みなどで必要になる
+
+例: ネットワークでバイナリを送る場合
+
+C言語では、「htons」や「htonl」などの関数を使ってEndian変換を実現できる。
+
+コマンドでは、「xxd」や「od」などのコマンドを使って、ファイルの内容を16進数形式で表示し、手作業でEndian変換を行うこともできる。
+
+## UNIXのbuiltinのEndianの変換関数の場所と実装
+
+endian_conversion.cというファイル名で以下のような内容のファイルを用意する
+
+```
+#include <stdio.h>
+#include <arpa/inet.h>
+
+int main() {
+    unsigned short x = 12345;
+    unsigned short y = htons(x);
+
+    printf("x = %d\n", x);
+    printf("y = %d\n", y);
+
+    return 0;
+}
+```
+
+`$ clang -E endian_conversion.c | grep arpa/inet`を実行
+
+```
+# 1 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/arpa/inet.h" 1 3 4
+# 68 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/arpa/inet.h" 3 4
+# 69 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/arpa/inet.h" 2 3 4
+# 70 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/arpa/inet.h" 2 3 4
+# 72 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/arpa/inet.h" 2 3 4
+```
+
+`/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/arpa/inet.h`を見る
+
+htonsの実装がない、代わりに`#include <machine/endian.h>`という行を見つけた
+
+`/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/machine/endian.h`を見る
+
+まだ、htonsの実装がない、代わりに`#include "i386/endian.h"`という行を見つけた
+
+`/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/i386/endian.h`を見る
+
+まだ、htonsの実装がない、代わりに`#include <sys/_endian.h>`という行を見つけた
+
+`/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/sys/_endian.h`を見る
+
+```
+#if defined(lint)
+
+__BEGIN_DECLS
+__uint16_t      ntohs(__uint16_t);
+__uint16_t      htons(__uint16_t);
+__uint32_t      ntohl(__uint32_t);
+__uint32_t      htonl(__uint32_t);
+__END_DECLS
+```
+
+このようにhtonsがマクロとして定義されていた
